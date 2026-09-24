@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from app.database import database_path, get_connection, init_db
 from app.main import app
+from app.seismic.cli import add_subparsers as add_seismic_subparsers
 
 
 def command_init() -> int:
@@ -41,11 +42,15 @@ def command_smoke() -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="township-service", description="乡镇政务协同服务维护入口")
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("init-db", help="初始化 SQLite 数据库")
-    subparsers.add_parser("check-db", help="检查数据库完整性")
-    subparsers.add_parser("smoke", help="执行本地 API 冒烟检查")
+    p = subparsers.add_parser("init-db", help="初始化 SQLite 数据库")
+    p.set_defaults(func=lambda args: command_init())
+    p = subparsers.add_parser("check-db", help="检查数据库完整性")
+    p.set_defaults(func=lambda args: command_check())
+    p = subparsers.add_parser("smoke", help="执行本地 API 冒烟检查")
+    p.set_defaults(func=lambda args: command_smoke())
+    add_seismic_subparsers(subparsers)
     args = parser.parse_args()
-    return {"init-db": command_init, "check-db": command_check, "smoke": command_smoke}[args.command]()
+    return args.func(args)
 
 
 if __name__ == "__main__":

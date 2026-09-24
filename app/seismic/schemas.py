@@ -44,7 +44,8 @@ class ComputeRequest(BaseModel):
     requested_by: str = Field(default="system", max_length=80)
 
 
-class TaskComplete(BaseModel):
+class TaskFail(BaseModel):
     worker_id: str = Field(..., min_length=1, max_length=80)
-    result: dict = Field(default_factory=dict)
+    error_message: str = Field(..., min_length=1, max_length=1000)
+    retry_seconds: int | None = Field(default=None, ge=0, le=86_400)
 
