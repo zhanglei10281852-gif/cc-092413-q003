@@ -42,9 +42,10 @@ class ComputeRequest(BaseModel):
     grid_step_km: float = Field(default=10, gt=0, le=100)
     radius_km: float = Field(default=100, gt=0, le=1000)
     requested_by: str = Field(default="system", max_length=80)
+    max_attempts: int = Field(default=5, ge=1, le=20)
 
 
-class TaskComplete(BaseModel):
+class TaskFailure(BaseModel):
     worker_id: str = Field(..., min_length=1, max_length=80)
-    result: dict = Field(default_factory=dict)
-
+    error_message: str = Field(..., min_length=1, max_length=1000)
+    retry_seconds: int | None = Field(default=None, ge=0, le=86400)

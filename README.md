@@ -76,6 +76,56 @@ python -m app.cli smoke
 
 该命令在进程内启动应用并检查服务根路径与健康接口，适合部署前快速确认路由和数据库初始化是否正常。
 
+## 烈度网格计算任务流程
+
+烈度估计以离线任务方式运行，状态全部持久化在 SQLite（`seismic_computations` 表），不依赖消息队列。状态机：
+
+```text
+queued ──claim──▶ leased ──complete──▶ done（完成回执，不可变）
+  ▲                 │
+  │             fail│（未超 max_attempts，指数退避）
+  └──── retry ◀─────┤
+                    └──超过 max_attempts──▶ failed ──人工 retry──▶ queued
+leased 且 lease_until 已到期 ──recover/下次 claim 自动回收──▶ retry
+```
+
+关键约定：
+
+- **提交去重**：任务键 = 事件输入摘要（震级、震源深度、全部台站观测）+ 模型版本 + 网格步长/半径的规范化哈希，数值参数会归一化（`20` 与 `20.0` 视为同一任务）。重复提交返回同一行并带 `deduped: true`，不会产生两份数据。
+- **完成回执**：结果内嵌 `model_version`、`input_digest`、`input_summary`（震级/深度/台站清单等）、`grid.order`（固定 `lat_asc_lon_asc`：纬度外循环升序、经度内循环升序）、`grid.shape` 与全部格点，并对这些内容计算 SHA-256 `checksum`。
+- **版本防护**：完成时校验结果的模型版本与输入摘要必须与任务行一致（SQL 同时带 `model_version` 条件），旧工作者无法用旧模型结果覆盖较新版本；已完成任务重复回执返回冲突，不覆盖既有结果。
+- **失败重试**：工作者用 `/fail` 上报错误，按退避时间回到 `retry`；达到 `max_attempts` 置 `failed`，可由人工 `/retry` 清零重新入队。只有租约持有者能完成或上报失败。
+- **重启恢复**：工作者崩溃或服务重启后，`leased` 任务在租约到期后由 `recover` 接口或下一次 `claim` 自动回收，attempts 累加后可重新领取。
+
+命令行（完全离线，不启动 HTTP 服务）：
+
+```bash
+python -m app.cli seismic list [--status queued]
+python -m app.cli seismic enqueue <event_id> --model-version gmpe-2026.1 --grid-step-km 20 --radius-km 100
+python -m app.cli seismic claim worker-1            # 领取
+python -m app.cli seismic run worker-1              # 领取+执行+校验
+python -m app.cli seismic fail <task_id> worker-1 "网格生成失败" --retry-seconds 30
+python -m app.cli seismic retry <task_id>           # failed 任务重新排队
+python -m app.cli seismic status <task_id>          # 查看状态与回执
+python -m app.cli seismic verify <task_id>          # 校验 checksum/版本/摘要/坐标顺序
+python -m app.cli seismic recover [--grace-seconds 0]  # 回收过期租约
+python -m app.cli seismic demo                      # 端到端演示（去重/校验/重启恢复）
+```
+
+HTTP 接口（前缀 `/api/seismic`）：
+
+| 方法 | 路径 | 说明 |
+| --- | --- | --- |
+| POST | `/events/{id}/computations` | 提交任务（幂等，返回 `deduped`） |
+| GET | `/computations?status=` | 任务列表 |
+| GET | `/computations/{id}` | 任务状态与回执 |
+| POST | `/computations/claim?worker_id=` | 领取（自动回收过期租约） |
+| POST | `/computations/{id}/calculate?worker_id=` | 执行并完成 |
+| POST | `/computations/{id}/fail` | 上报失败（body：`worker_id`、`error_message`、可选 `retry_seconds`） |
+| POST | `/computations/{id}/retry` | 人工重试失败任务 |
+| POST | `/computations/recover` | 批量回收过期租约（重启后调用） |
+| GET | `/computations/{id}/verify` | 结果校验报告 |
+
 ## 目录结构
 
 ```text
